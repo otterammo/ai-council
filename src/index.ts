@@ -6,7 +6,7 @@ import ora from "ora";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
-import { runCouncil } from "./council";
+import { runConversation } from "./council";
 import { CouncilHooks } from "./types";
 
 function printBanner(): void {
@@ -30,13 +30,8 @@ async function promptForQuestion(): Promise<string> {
   }
 }
 
-function makeDivider(label: string, char = "─", width = 60): string {
-  const cleanLabel = ` ${label.trim()} `;
-  const totalWidth = Math.max(width, cleanLabel.length + 2);
-  const sideLength = Math.max(2, Math.floor((totalWidth - cleanLabel.length) / 2));
-  const left = char.repeat(sideLength);
-  const right = char.repeat(totalWidth - cleanLabel.length - sideLength);
-  return `${left}${cleanLabel}${right}`;
+function divider(width = 40): string {
+  return "─".repeat(width);
 }
 
 async function main(): Promise<void> {
@@ -49,33 +44,28 @@ async function main(): Promise<void> {
   }
 
   const spinner = ora({
-    text: chalk.dim("Gathering the council..."),
+    text: chalk.dim("Consulting the moderator..."),
     color: "cyan",
   }).start();
 
   let judgeBuffer = "";
 
   const hooks: CouncilHooks = {
-    onRoundStart: () => {
-      if (spinner.isSpinning) {
-        spinner.stop();
-      }
-    },
-    onAgentTurnStart: (round, agent) => {
+    onAgentTurnStart: (agent) => {
       if (spinner.isSpinning) {
         spinner.stop();
       }
       console.log();
-      console.log(chalk.cyan(makeDivider(`Round ${round} • ${agent.name}`)));
-      console.log();
+      console.log(chalk.cyan(`[${agent.name}]`));
+      console.log(chalk.dim(divider()));
     },
     onAgentToken: (_agent, token) => {
       process.stdout.write(token);
     },
     onAgentTurnComplete: () => {
-      process.stdout.write("\n\n");
+      process.stdout.write("\n");
     },
-    onAgentError: (_round, agent, error) => {
+    onAgentError: (agent, error) => {
       console.log(chalk.red(`\n${agent.name} encountered an error: ${error.message}\n`));
     },
     onJudgeStart: () => {
@@ -83,18 +73,20 @@ async function main(): Promise<void> {
         spinner.stop();
       }
       judgeBuffer = "";
-      console.log(chalk.cyan(`\n${makeDivider("Final Judgment", "═")}\n`));
+      console.log(chalk.bold("\nFinal Judgment\n"));
     },
     onJudgeToken: (token) => {
       judgeBuffer += token;
     },
-    onJudgeComplete: () => {
-      const boxed = boxen(judgeBuffer.trim(), {
-        padding: { top: 1, bottom: 1, left: 2, right: 2 },
-        borderColor: "cyan",
+    onJudgeComplete: (fullResponse) => {
+      judgeBuffer = fullResponse.trim();
+      const boxed = boxen(judgeBuffer, {
+        padding: 1,
+        borderColor: "gray",
         borderStyle: "round",
       });
       console.log(boxed);
+      console.log();
     },
     onJudgeError: (error) => {
       console.log(chalk.red(`Judge failed: ${error.message}`));
@@ -102,7 +94,7 @@ async function main(): Promise<void> {
   };
 
   try {
-    await runCouncil(question, { hooks });
+    await runConversation(question, { hooks });
   } catch (error) {
     if (spinner.isSpinning) {
       spinner.stop();

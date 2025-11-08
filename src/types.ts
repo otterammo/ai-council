@@ -5,15 +5,15 @@ export interface OllamaChatMessage {
   content: string;
 }
 
+export type SpeakerName = "Analyst" | "Optimist" | "Critic" | "Judge";
+
 export type Message = {
-  speaker: string;
+  speaker: SpeakerName | "User";
   content: string;
-  /** Present for agent messages so the CLI can group by round. */
-  round?: number;
 };
 
 export type AgentConfig = {
-  name: string;
+  name: SpeakerName;
   model: string;
   systemPrompt: string;
   /**
@@ -23,12 +23,17 @@ export type AgentConfig = {
   transcriptWindow?: number;
 };
 
+export type ModeratorDecision = {
+  nextSpeaker: SpeakerName;
+  shouldConclude: boolean;
+  reason?: string;
+};
+
 export interface CouncilHooks {
-  onRoundStart?(round: number): void;
-  onAgentTurnStart?(round: number, agent: AgentConfig): void;
+  onAgentTurnStart?(agent: AgentConfig): void;
   onAgentToken?(agent: AgentConfig, token: string): void;
-  onAgentTurnComplete?(round: number, agent: AgentConfig, fullResponse: string): void;
-  onAgentError?(round: number, agent: AgentConfig, error: Error): void;
+  onAgentTurnComplete?(agent: AgentConfig, fullResponse: string): void;
+  onAgentError?(agent: AgentConfig, error: Error): void;
   onJudgeStart?(agent: AgentConfig): void;
   onJudgeToken?(token: string): void;
   onJudgeComplete?(fullResponse: string): void;
@@ -36,7 +41,7 @@ export interface CouncilHooks {
 }
 
 export interface CouncilOptions {
-  rounds?: number;
+  maxTurns?: number;
   transcriptWindow?: number;
   hooks?: CouncilHooks;
 }

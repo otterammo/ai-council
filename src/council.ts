@@ -1,68 +1,106 @@
-import { AGENTS, DEFAULT_ROUNDS, DEFAULT_TRANSCRIPT_WINDOW, JUDGE_AGENT } from "./agents";
+import { AGENTS, DEFAULT_TRANSCRIPT_WINDOW, JUDGE_AGENT } from "./agents";
 import { streamOllamaChat } from "./ollamaClient";
+import { getModeratorDecision } from "./moderator";
 import {
   AgentConfig,
   CouncilOptions,
   CouncilResult,
   Message,
   OllamaChatMessage,
+  SpeakerName,
 } from "./types";
 
-/**
- * Runs the council debate with streaming updates for each agent turn.
- */
-export async function runCouncil(
+const DEFAULT_MAX_TURNS = 12;
+
+export async function runConversation(
   userQuestion: string,
   options?: CouncilOptions
 ): Promise<CouncilResult> {
-  const trimmedQuestion = userQuestion.trim();
-  if (!trimmedQuestion) {
+  const question = userQuestion.trim();
+  if (!question) {
     throw new Error("User question cannot be empty.");
   }
 
-  const rounds = options?.rounds ?? DEFAULT_ROUNDS;
+  const transcript: Message[] = [{ speaker: "User", content: question }];
   const transcriptWindow = options?.transcriptWindow ?? DEFAULT_TRANSCRIPT_WINDOW;
+  const maxTurns = options?.maxTurns ?? DEFAULT_MAX_TURNS;
   const hooks = options?.hooks;
 
-  const transcript: Message[] = [{ speaker: "User", content: trimmedQuestion }];
+  let turns = 0;
+  let shouldConclude = false;
+  let currentSpeaker: SpeakerName = "Analyst";
 
-  for (let round = 1; round <= rounds; round += 1) {
-    hooks?.onRoundStart?.(round);
-
-    for (const agent of AGENTS) {
-      const windowSize = agent.transcriptWindow ?? transcriptWindow;
-      const messages = buildAgentMessages(agent, trimmedQuestion, transcript, windowSize);
-
-      hooks?.onAgentTurnStart?.(round, agent);
-
-      const tokenHandler =
-        hooks?.onAgentToken != null
-          ? (fragment: string) => hooks.onAgentToken?.(agent, fragment)
-          : () => undefined;
-
-      let responseText = "";
-      try {
-        responseText = await streamOllamaChat(agent.model, messages, tokenHandler);
-      } catch (error) {
-        const err = error instanceof Error ? error : new Error(String(error));
-        hooks?.onAgentError?.(round, agent, err);
-        responseText = `[ERROR] ${err.message}`;
-      }
-
-      transcript.push({ speaker: agent.name, content: responseText, round });
-      hooks?.onAgentTurnComplete?.(round, agent, responseText);
+  while (turns < maxTurns && !shouldConclude) {
+    if (currentSpeaker === "Judge") {
+      shouldConclude = true;
+      break;
     }
+
+    await runSingleTurnForAgent(
+      currentSpeaker,
+      question,
+      transcript,
+      transcriptWindow,
+      hooks
+    );
+
+    turns += 1;
+
+    const decision = await getModeratorDecision(question, transcript);
+    currentSpeaker = decision.nextSpeaker;
+    shouldConclude = decision.shouldConclude;
   }
 
+  const judgment = await runJudge(question, transcript, hooks);
+
+  return { transcript, judgment };
+}
+
+async function runSingleTurnForAgent(
+  speaker: SpeakerName,
+  originalQuestion: string,
+  transcript: Message[],
+  transcriptWindow: number,
+  hooks?: CouncilOptions["hooks"]
+): Promise<void> {
+  const agent = getAgentConfig(speaker);
+  const windowSize = agent.transcriptWindow ?? transcriptWindow;
+  const messages = buildAgentMessages(agent, originalQuestion, transcript, windowSize);
+
+  hooks?.onAgentTurnStart?.(agent);
+
+  const tokenHandler =
+    hooks?.onAgentToken != null
+      ? (fragment: string) => hooks.onAgentToken?.(agent, fragment)
+      : () => undefined;
+
+  let responseText = "";
+  try {
+    responseText = await streamOllamaChat(agent.model, messages, tokenHandler);
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    hooks?.onAgentError?.(agent, err);
+    responseText = `[ERROR] ${err.message}`;
+  }
+
+  transcript.push({ speaker: agent.name, content: responseText });
+  hooks?.onAgentTurnComplete?.(agent, responseText);
+}
+
+async function runJudge(
+  originalQuestion: string,
+  transcript: Message[],
+  hooks?: CouncilOptions["hooks"]
+): Promise<string> {
+  const messages = buildJudgeMessages(originalQuestion, transcript);
   hooks?.onJudgeStart?.(JUDGE_AGENT);
 
-  const judgeMessages = buildJudgeMessages(trimmedQuestion, transcript);
-  const judgeTokenHandler =
+  const tokenHandler =
     hooks?.onJudgeToken != null ? (fragment: string) => hooks.onJudgeToken?.(fragment) : () => undefined;
 
   let judgment = "";
   try {
-    judgment = await streamOllamaChat(JUDGE_AGENT.model, judgeMessages, judgeTokenHandler);
+    judgment = await streamOllamaChat(JUDGE_AGENT.model, messages, tokenHandler);
     hooks?.onJudgeComplete?.(judgment);
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
@@ -70,7 +108,16 @@ export async function runCouncil(
     throw err;
   }
 
-  return { transcript, judgment };
+  transcript.push({ speaker: "Judge", content: judgment });
+  return judgment;
+}
+
+function getAgentConfig(name: SpeakerName): AgentConfig {
+  const agent = AGENTS.find((candidate) => candidate.name === name);
+  if (!agent) {
+    throw new Error(`Unknown agent: ${name}`);
+  }
+  return agent;
 }
 
 function buildAgentMessages(
@@ -88,7 +135,11 @@ function buildAgentMessages(
     "Recent transcript excerpt:",
     recap,
     "",
-    `Now respond as ${agent.name}. Address the most recent points raised, and feel free to agree, disagree, or introduce a new angle.`,
+    `Instructions for ${agent.name}:`,
+    "- Do NOT re-summarize the whole conversation or restate the question.",
+    "- React to one or two of the most relevant recent points.",
+    "- Add something new: a clarification, critique, or concrete next step.",
+    "- Keep the tone conversational with 2–4 short paragraphs and reference other agents by name when useful.",
   ].join("\n");
 
   return [
@@ -99,13 +150,14 @@ function buildAgentMessages(
 
 function buildJudgeMessages(originalQuestion: string, transcript: Message[]): OllamaChatMessage[] {
   const fullTranscript = serializeTranscript(transcript) || "(empty)";
+
   const userContent = [
     `User Question: ${originalQuestion}`,
     "",
     "Full debate transcript:",
     fullTranscript,
     "",
-    'Summarize each agent, highlight agreements vs disagreements, and finish with a line that begins "Final Recommendation:".',
+    'Summarize each visible agent, highlight agreements and disagreements, and finish with a line starting with "Final Recommendation:".',
   ].join("\n");
 
   return [
