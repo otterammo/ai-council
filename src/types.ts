@@ -5,28 +5,43 @@ export interface OllamaChatMessage {
   content: string;
 }
 
-export interface AgentConfig {
+export type Message = {
+  speaker: string;
+  content: string;
+  /** Present for agent messages so the CLI can group by round. */
+  round?: number;
+};
+
+export type AgentConfig = {
   name: string;
   model: string;
   systemPrompt: string;
-  /** Optional override for how many prior messages this agent should see. */
+  /**
+   * Optional override for how many previous transcript entries this agent
+   * should see when forming its response.
+   */
   transcriptWindow?: number;
-}
+};
 
-export interface TranscriptMessage {
-  speaker: string;
-  content: string;
-  /** Round number this message belongs to; omitted for the initial user prompt. */
-  round?: number;
+export interface CouncilHooks {
+  onRoundStart?(round: number): void;
+  onAgentTurnStart?(round: number, agent: AgentConfig): void;
+  onAgentToken?(agent: AgentConfig, token: string): void;
+  onAgentTurnComplete?(round: number, agent: AgentConfig, fullResponse: string): void;
+  onAgentError?(round: number, agent: AgentConfig, error: Error): void;
+  onJudgeStart?(agent: AgentConfig): void;
+  onJudgeToken?(token: string): void;
+  onJudgeComplete?(fullResponse: string): void;
+  onJudgeError?(error: Error): void;
 }
 
 export interface CouncilOptions {
   rounds?: number;
-  /** Max messages from the transcript to show each agent. */
   transcriptWindow?: number;
+  hooks?: CouncilHooks;
 }
 
 export interface CouncilResult {
-  transcript: TranscriptMessage[];
+  transcript: Message[];
   judgment: string;
 }

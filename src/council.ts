@@ -1,48 +1,74 @@
 import { AGENTS, DEFAULT_ROUNDS, DEFAULT_TRANSCRIPT_WINDOW, JUDGE_AGENT } from "./agents";
-import { callOllamaChat } from "./ollamaClient";
+import { streamOllamaChat } from "./ollamaClient";
 import {
   AgentConfig,
   CouncilOptions,
   CouncilResult,
+  Message,
   OllamaChatMessage,
-  TranscriptMessage,
 } from "./types";
 
 /**
- * Entry point that runs the debate for the configured agents and returns their transcript.
- * Use the options argument to tweak rounds or alter the transcript window used for context.
+ * Runs the council debate with streaming updates for each agent turn.
  */
 export async function runCouncil(
   userQuestion: string,
   options?: CouncilOptions
 ): Promise<CouncilResult> {
-  const rounds = options?.rounds ?? DEFAULT_ROUNDS;
-  const transcriptWindow = options?.transcriptWindow ?? DEFAULT_TRANSCRIPT_WINDOW;
-
-  if (!userQuestion.trim()) {
+  const trimmedQuestion = userQuestion.trim();
+  if (!trimmedQuestion) {
     throw new Error("User question cannot be empty.");
   }
 
-  const transcript: TranscriptMessage[] = [
-    { speaker: "User", content: userQuestion.trim() },
-  ];
+  const rounds = options?.rounds ?? DEFAULT_ROUNDS;
+  const transcriptWindow = options?.transcriptWindow ?? DEFAULT_TRANSCRIPT_WINDOW;
+  const hooks = options?.hooks;
+
+  const transcript: Message[] = [{ speaker: "User", content: trimmedQuestion }];
 
   for (let round = 1; round <= rounds; round += 1) {
+    hooks?.onRoundStart?.(round);
+
     for (const agent of AGENTS) {
       const windowSize = agent.transcriptWindow ?? transcriptWindow;
+      const messages = buildAgentMessages(agent, trimmedQuestion, transcript, windowSize);
+
+      hooks?.onAgentTurnStart?.(round, agent);
+
+      const tokenHandler =
+        hooks?.onAgentToken != null
+          ? (fragment: string) => hooks.onAgentToken?.(agent, fragment)
+          : () => undefined;
+
+      let responseText = "";
       try {
-        const messages = buildAgentMessages(agent, userQuestion, transcript, windowSize);
-        const reply = await callOllamaChat(agent.model, messages);
-        transcript.push({ speaker: agent.name, content: reply, round });
+        responseText = await streamOllamaChat(agent.model, messages, tokenHandler);
       } catch (error) {
-        const errMsg = `(${agent.name} failed: ${error instanceof Error ? error.message : String(error)})`;
-        console.error(errMsg);
-        transcript.push({ speaker: agent.name, content: `[ERROR] ${errMsg}`, round });
+        const err = error instanceof Error ? error : new Error(String(error));
+        hooks?.onAgentError?.(round, agent, err);
+        responseText = `[ERROR] ${err.message}`;
       }
+
+      transcript.push({ speaker: agent.name, content: responseText, round });
+      hooks?.onAgentTurnComplete?.(round, agent, responseText);
     }
   }
 
-  const judgment = await getJudgeDecision(userQuestion, transcript);
+  hooks?.onJudgeStart?.(JUDGE_AGENT);
+
+  const judgeMessages = buildJudgeMessages(trimmedQuestion, transcript);
+  const judgeTokenHandler =
+    hooks?.onJudgeToken != null ? (fragment: string) => hooks.onJudgeToken?.(fragment) : () => undefined;
+
+  let judgment = "";
+  try {
+    judgment = await streamOllamaChat(JUDGE_AGENT.model, judgeMessages, judgeTokenHandler);
+    hooks?.onJudgeComplete?.(judgment);
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    hooks?.onJudgeError?.(err);
+    throw err;
+  }
 
   return { transcript, judgment };
 }
@@ -50,19 +76,19 @@ export async function runCouncil(
 function buildAgentMessages(
   agent: AgentConfig,
   originalQuestion: string,
-  transcript: TranscriptMessage[],
+  transcript: Message[],
   transcriptWindow: number
 ): OllamaChatMessage[] {
   const recent = transcript.slice(-transcriptWindow);
-  const debateLines = serializeTranscript(recent);
+  const recap = serializeTranscript(recent) || "(no debate history yet)";
 
   const userContent = [
-    `Original Question: ${originalQuestion}`,
+    `User Question: ${originalQuestion}`,
     "",
-    "Below is the current debate transcript between User, Analyst, Optimist, and Critic.",
-    debateLines || "(no prior agent responses yet)",
+    "Recent transcript excerpt:",
+    recap,
     "",
-    `Instruction: Respond as ${agent.name}. Address relevant points from other agents when needed. Use 4-8 sentences and keep assumptions explicit.`,
+    `Now respond as ${agent.name}. Address the most recent points raised, and feel free to agree, disagree, or introduce a new angle.`,
   ].join("\n");
 
   return [
@@ -71,44 +97,23 @@ function buildAgentMessages(
   ];
 }
 
-async function getJudgeDecision(
-  originalQuestion: string,
-  transcript: TranscriptMessage[]
-): Promise<string> {
-  try {
-    const judgeMessages: OllamaChatMessage[] = [
-      { role: "system", content: JUDGE_AGENT.systemPrompt },
-      {
-        role: "user",
-        content: [
-          `Original Question: ${originalQuestion}`,
-          "",
-          "Full transcript (chronological):",
-          serializeTranscript(transcript) || "(empty)",
-          "",
-          "Remember: summarize each agent, highlight agreements/disagreements, and finish with Final Recommendation: ...",
-        ].join("\n"),
-      },
-    ];
+function buildJudgeMessages(originalQuestion: string, transcript: Message[]): OllamaChatMessage[] {
+  const fullTranscript = serializeTranscript(transcript) || "(empty)";
+  const userContent = [
+    `User Question: ${originalQuestion}`,
+    "",
+    "Full debate transcript:",
+    fullTranscript,
+    "",
+    'Summarize each agent, highlight agreements vs disagreements, and finish with a line that begins "Final Recommendation:".',
+  ].join("\n");
 
-    return await callOllamaChat(JUDGE_AGENT.model, judgeMessages);
-  } catch (error) {
-    throw new Error(
-      `Judge agent failed: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
+  return [
+    { role: "system", content: JUDGE_AGENT.systemPrompt },
+    { role: "user", content: userContent },
+  ];
 }
 
-function serializeTranscript(messages: TranscriptMessage[]): string {
-  return messages
-    .map((msg) => `${msg.speaker}: ${msg.content}`)
-    .join("\n");
+function serializeTranscript(messages: Message[]): string {
+  return messages.map((msg) => `${msg.speaker}: ${msg.content}`).join("\n");
 }
-
-/**
- * Helper for implementers: adjust DEFAULT_ROUNDS in agents.ts or pass options.rounds
- * when invoking runCouncil to change the debate length. Similarly, pass
- * options.transcriptWindow (or set agent.transcriptWindow) to control how much
- * of the transcript each agent can see.
- */
-export type { TranscriptMessage };

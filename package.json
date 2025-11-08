@@ -17,8 +17,14 @@
   ],
   "author": "",
   "license": "MIT",
-  "dependencies": {},
+  "dependencies": {
+    "boxen": "^5.1.2",
+    "chalk": "^4.1.2",
+    "figlet": "^1.6.0",
+    "ora": "^5.4.1"
+  },
   "devDependencies": {
+    "@types/figlet": "^1.5.9",
     "@types/node": "^20.12.7",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
