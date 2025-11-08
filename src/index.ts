@@ -36,6 +36,9 @@ function divider(width = 40): string {
 
 async function main(): Promise<void> {
   printBanner();
+  const conversationId = Date.now().toString(36);
+  console.log(chalk.dim(`=== AI Council Run #${conversationId} ===`));
+  console.log();
 
   const question = await promptForQuestion();
   if (!question) {

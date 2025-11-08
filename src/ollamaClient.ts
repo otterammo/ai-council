@@ -1,6 +1,11 @@
 import { OllamaChatMessage } from "./types";
 
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434";
+const DEBUG = process.env.AI_COUNCIL_DEBUG === "1";
+
+interface OllamaCallOptions {
+  label?: string;
+}
 
 interface OllamaChatResponse {
   message?: {
@@ -27,8 +32,12 @@ function getTimeoutMs(): number {
  */
 export async function callOllamaChat(
   model: string,
-  messages: OllamaChatMessage[]
+  messages: OllamaChatMessage[],
+  options: OllamaCallOptions = {}
 ): Promise<string> {
+  const debugLabel = formatDebugLabel(options.label);
+  logDebugRequest(debugLabel, model, messages);
+
   const runtimeFetch = ensureFetch();
   const controller = new AbortController();
   const timeoutMs = getTimeoutMs();
@@ -58,6 +67,7 @@ export async function callOllamaChat(
       throw new Error("Ollama response missing assistant content.");
     }
 
+    logDebugResponse(debugLabel, content);
     return content;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
@@ -77,13 +87,18 @@ export async function callOllamaChat(
 export async function streamOllamaChat(
   model: string,
   messages: OllamaChatMessage[],
-  onToken: (token: string) => void
+  onToken: (token: string) => void,
+  options: OllamaCallOptions = {}
 ): Promise<string> {
+  const debugLabel = formatDebugLabel(options.label);
+  logDebugRequest(debugLabel, model, messages);
+
   const runtimeFetch = ensureFetch();
   const controller = new AbortController();
   const timeoutMs = getTimeoutMs();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+  let fullText = "";
   try {
     const response = await runtimeFetch(`${DEFAULT_OLLAMA_URL}/api/chat`, {
       method: "POST",
@@ -104,7 +119,6 @@ export async function streamOllamaChat(
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let fullText = "";
     let finished = false;
 
     const processLine = (rawLine: string): void => {
@@ -174,6 +188,7 @@ export async function streamOllamaChat(
       throw new Error("Ollama stream ended without a completion signal.");
     }
 
+    logDebugResponse(debugLabel, fullText);
     return fullText;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
@@ -185,4 +200,46 @@ export async function streamOllamaChat(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function formatDebugLabel(label?: string): string {
+  const trimmed = label?.trim();
+  return trimmed ? `[${trimmed.toUpperCase()}]` : "[OLLAMA]";
+}
+
+function logDebugRequest(label: string, model: string, messages: OllamaChatMessage[]): void {
+  if (!DEBUG) {
+    return;
+  }
+  console.error(`===== ${label} REQUEST =====`);
+  console.error(`model: ${model}`);
+  console.error("messages:");
+  console.error(formatMessagesForDebug(messages));
+  console.error();
+}
+
+function logDebugResponse(label: string, rawText: string): void {
+  if (!DEBUG) {
+    return;
+  }
+  console.error(`===== ${label} RAW RESPONSE =====`);
+  console.error(rawText || "<empty>");
+  console.error();
+}
+
+function formatMessagesForDebug(messages: OllamaChatMessage[]): string {
+  if (messages.length === 0) {
+    return "  <no messages>";
+  }
+
+  return messages
+    .map((message) => {
+      const contentLines = message.content ? message.content.split("\n") : [];
+      const prettyContent =
+        contentLines.length === 0
+          ? "    <empty>"
+          : contentLines.map((line) => `    ${line}`).join("\n");
+      return `- role: ${message.role}\n  content:\n${prettyContent}`;
+    })
+    .join("\n");
 }

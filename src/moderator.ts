@@ -22,13 +22,17 @@ Your role:
 - You also decide when the discussion has gone far enough and it is time for the Judge to conclude.
 
 Guidelines:
+- You are managing a short, focused discussion with a very limited budget of roughly 6–8 total debater turns (Analyst/Optimist/Critic) before the Judge.
+- Track how many debater turns have already happened, and err on concluding once they approach that budget.
+- Early turns should surface distinct perspectives; middle turns should clarify disagreements; final turns should push toward convergence and close open items.
 - Keep the discussion balanced. Do not let one voice dominate unless it is clearly helpful.
 - Prefer alternating perspectives (e.g., Analyst → Optimist → Critic → Analyst …) when reasonable.
 - Avoid selecting the same speaker twice in a row unless there is a compelling reason and the others have already had a fair chance to respond.
 - You may choose the same speaker consecutively only if they must clarify or correct something crucial and this benefits the conversation.
-- If the conversation starts repeating itself or converging, move toward the Judge.
-- Once the core disagreement or key insights are on the table, hand off to the Judge.
-- If you think it is time to wrap up, choose "Judge" and set "shouldConclude": true.
+- If the last two or three debater turns are variations on the same themes and no clearly new angle seems likely, almost always transition to the Judge.
+- If you are unsure whether a new debater turn would add real novelty, prefer to conclude with the Judge instead.
+- Do not drag the debate out just to restate prior arguments. When diminishing returns appear, set nextSpeaker to "Judge" and shouldConclude to true.
+- Once the core disagreement or key insights are on the table, hand off to the Judge for the summary and recommendation.
 
 Output format:
 - You MUST respond with VALID JSON ONLY, no extra text, in this shape:
@@ -56,6 +60,19 @@ export async function getModeratorDecision(
       .reverse()
       .find((message) => message.speaker !== "User")?.speaker ?? "none";
 
+  const debaterMessages = transcript.filter(
+    (message) =>
+      message.speaker === "Analyst" ||
+      message.speaker === "Optimist" ||
+      message.speaker === "Critic"
+  );
+  const debaterTurnCount = debaterMessages.length;
+  const recentDebaterSpeakers =
+    debaterMessages
+      .slice(-3)
+      .map((message) => message.speaker)
+      .join(" -> ") || "none yet";
+
   const messages: OllamaChatMessage[] = [
     { role: "system", content: moderatorSystemPrompt },
     {
@@ -67,9 +84,13 @@ export async function getModeratorDecision(
         "Recent transcript (most recent last):",
         recent || "(conversation not started yet)",
         "",
-        `The last agent who spoke was: ${lastNonUser}. Avoid selecting the same agent twice in a row unless it is absolutely necessary.`,
+        `Last non-user speaker: ${lastNonUser}. Avoid selecting the same agent twice in a row unless it is absolutely necessary.`,
+        `Debater turns used so far: ${debaterTurnCount}. Target total debater turns: about 6-8.`,
+        `Recent debater speaker order (oldest to newest): ${recentDebaterSpeakers}.`,
         "",
         "Decide which participant should speak next, and whether we should conclude.",
+        "If the recent turns are repeating similar themes or the discussion feels resolved, select Judge and conclude immediately.",
+        "If you are unsure a new debater turn will add real novelty, hand off to the Judge instead of stalling.",
         "Remember: respond with JSON only. If it's time for the Judge, set nextSpeaker to \"Judge\" and shouldConclude to true.",
       ].join("\n"),
     },
@@ -77,7 +98,7 @@ export async function getModeratorDecision(
 
   let raw = "";
   try {
-    raw = await callOllamaChat(MODERATOR_MODEL, messages);
+    raw = await callOllamaChat(MODERATOR_MODEL, messages, { label: "MODERATOR" });
   } catch (error) {
     return {
       nextSpeaker: "Judge",
