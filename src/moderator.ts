@@ -24,8 +24,11 @@ Your role:
 Guidelines:
 - Keep the discussion balanced. Do not let one voice dominate unless it is clearly helpful.
 - Prefer alternating perspectives (e.g., Analyst → Optimist → Critic → Analyst …) when reasonable.
+- Avoid selecting the same speaker twice in a row unless there is a compelling reason and the others have already had a fair chance to respond.
+- You may choose the same speaker consecutively only if they must clarify or correct something crucial and this benefits the conversation.
 - If the conversation starts repeating itself or converging, move toward the Judge.
 - Once the core disagreement or key insights are on the table, hand off to the Judge.
+- If you think it is time to wrap up, choose "Judge" and set "shouldConclude": true.
 
 Output format:
 - You MUST respond with VALID JSON ONLY, no extra text, in this shape:
@@ -48,6 +51,11 @@ export async function getModeratorDecision(
     .map((message) => `${message.speaker}: ${message.content}`)
     .join("\n\n");
 
+  const lastNonUser =
+    [...transcript]
+      .reverse()
+      .find((message) => message.speaker !== "User")?.speaker ?? "none";
+
   const messages: OllamaChatMessage[] = [
     { role: "system", content: moderatorSystemPrompt },
     {
@@ -58,6 +66,8 @@ export async function getModeratorDecision(
         "",
         "Recent transcript (most recent last):",
         recent || "(conversation not started yet)",
+        "",
+        `The last agent who spoke was: ${lastNonUser}. Avoid selecting the same agent twice in a row unless it is absolutely necessary.`,
         "",
         "Decide which participant should speak next, and whether we should conclude.",
         "Remember: respond with JSON only. If it's time for the Judge, set nextSpeaker to \"Judge\" and shouldConclude to true.",

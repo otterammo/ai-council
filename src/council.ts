@@ -29,6 +29,7 @@ export async function runConversation(
   let turns = 0;
   let shouldConclude = false;
   let currentSpeaker: SpeakerName = "Analyst";
+  let lastSpeaker: SpeakerName | null = null;
 
   while (turns < maxTurns && !shouldConclude) {
     if (currentSpeaker === "Judge") {
@@ -45,10 +46,25 @@ export async function runConversation(
     );
 
     turns += 1;
+    lastSpeaker = currentSpeaker;
 
     const decision = await getModeratorDecision(question, transcript);
-    currentSpeaker = decision.nextSpeaker;
+    let nextSpeaker = decision.nextSpeaker;
     shouldConclude = decision.shouldConclude;
+
+    const debaters: SpeakerName[] = ["Analyst", "Optimist", "Critic"];
+    if (
+      !shouldConclude &&
+      debaters.includes(nextSpeaker) &&
+      nextSpeaker === lastSpeaker
+    ) {
+      const alternatives = debaters.filter((name) => name !== lastSpeaker);
+      if (alternatives.length > 0) {
+        nextSpeaker = alternatives[Math.floor(Math.random() * alternatives.length)];
+      }
+    }
+
+    currentSpeaker = nextSpeaker;
   }
 
   const judgment = await runJudge(question, transcript, hooks);
@@ -65,7 +81,14 @@ async function runSingleTurnForAgent(
 ): Promise<void> {
   const agent = getAgentConfig(speaker);
   const windowSize = agent.transcriptWindow ?? transcriptWindow;
-  const messages = buildAgentMessages(agent, originalQuestion, transcript, windowSize);
+  const isFirstAgentTurn = transcript.every((msg) => msg.speaker === "User");
+  const messages = buildAgentMessages(
+    agent,
+    originalQuestion,
+    transcript,
+    windowSize,
+    isFirstAgentTurn
+  );
 
   hooks?.onAgentTurnStart?.(agent);
 
@@ -83,8 +106,13 @@ async function runSingleTurnForAgent(
     responseText = `[ERROR] ${err.message}`;
   }
 
-  transcript.push({ speaker: agent.name, content: responseText });
-  hooks?.onAgentTurnComplete?.(agent, responseText);
+  const cleaned =
+    !responseText.startsWith("[ERROR]")
+      ? sanitizeAgentResponse(agent.name, responseText)
+      : responseText;
+
+  transcript.push({ speaker: agent.name, content: cleaned });
+  hooks?.onAgentTurnComplete?.(agent, cleaned);
 }
 
 async function runJudge(
@@ -124,12 +152,13 @@ function buildAgentMessages(
   agent: AgentConfig,
   originalQuestion: string,
   transcript: Message[],
-  transcriptWindow: number
+  transcriptWindow: number,
+  isFirstAgentTurn: boolean
 ): OllamaChatMessage[] {
   const recent = transcript.slice(-transcriptWindow);
   const recap = serializeTranscript(recent) || "(no debate history yet)";
 
-  const userContent = [
+  const instructions: (string | undefined)[] = [
     `User Question: ${originalQuestion}`,
     "",
     "Recent transcript excerpt:",
@@ -139,8 +168,15 @@ function buildAgentMessages(
     "- Do NOT re-summarize the whole conversation or restate the question.",
     "- React to one or two of the most relevant recent points.",
     "- Add something new: a clarification, critique, or concrete next step.",
-    "- Keep the tone conversational with 2–4 short paragraphs and reference other agents by name when useful.",
-  ].join("\n");
+    "- Do not begin with stock phrases such as \"I'd like to respond...\" or \"I'm glad...\". Mention another agent briefly only if necessary, then dive into your core point.",
+    "- Keep the tone conversational with 2–4 short paragraphs and reference other agents by name only when useful.",
+    "- Refer to yourself as \"I\" or \"me\"—never by your role name—and only use other agent names when you mean them.",
+    isFirstAgentTurn
+      ? "- You are the first agent to respond after the user. No one else has spoken yet, so do not imply prior remarks."
+      : undefined,
+  ];
+
+  const userContent = instructions.filter(Boolean).join("\n");
 
   return [
     { role: "system", content: agent.systemPrompt },
@@ -168,4 +204,30 @@ function buildJudgeMessages(originalQuestion: string, transcript: Message[]): Ol
 
 function serializeTranscript(messages: Message[]): string {
   return messages.map((msg) => `${msg.speaker}: ${msg.content}`).join("\n");
+}
+
+function sanitizeAgentResponse(agentName: string, text: string): string {
+  const normalized = normalizeSelfReference(agentName, text);
+  const stripped = stripClichedLeadIn(normalized);
+  const trimmed = stripped.trimStart();
+  return trimmed.length > 0 ? trimmed : text.trim();
+}
+
+function normalizeSelfReference(agentName: string, text: string): string {
+  const possessive = new RegExp(`\\b${agentName}'?s\\b`, "gi");
+  const standalone = new RegExp(`\\b${agentName}\\b`, "gi");
+  return text.replace(possessive, "my").replace(standalone, "I");
+}
+
+function stripClichedLeadIn(text: string): string {
+  const patterns = [
+    /^I(?:'d| would)\s+like to\s+(?:respond|add|build)[^.]*\.\s*/i,
+    /^I'm\s+glad\s+[A-Za-z]+(?:'s| has)?\s+(?:mentioned|raised)[^.]*\.\s*/i,
+    /^I(?:'d| would)\s+like to\s+respond to\s+[A-Za-z]+['’]s\s+(?:point|proposal|idea)[^.]*\.\s*/i,
+  ];
+  let result = text;
+  for (const pattern of patterns) {
+    result = result.replace(pattern, "");
+  }
+  return result;
 }
