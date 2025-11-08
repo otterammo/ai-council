@@ -1,26 +1,45 @@
 import { callOllamaChat } from "./ollamaClient";
-import type { LoadedPersonas } from "./personas";
+import type { ActivePanel } from "./panels";
+import type { PersonaConfig } from "./personas";
 import { Message, ModeratorDecision, OllamaChatMessage } from "./types";
 
 export async function getModeratorDecision(
   userQuestion: string,
   transcript: Message[],
-  personas: LoadedPersonas
+  panel: ActivePanel
 ): Promise<ModeratorDecision> {
-  const debaterNames = personas.debaters.map((persona) => persona.name);
-  const judgeName = personas.judge.name;
-  const allowedSpeakers = Array.from(new Set([...debaterNames, judgeName]));
+  const activeDebaters = panel.debaters;
+  const judge = panel.judge;
+  const moderator = panel.moderator;
+
+  if (activeDebaters.length === 0) {
+    return {
+      nextSpeaker: judge.name,
+      shouldConclude: true,
+      reason: "Fallback: panel has no debaters",
+    };
+  }
+
+  const debaterNames = activeDebaters.map((persona) => persona.name);
+  const allowedSpeakers = Array.from(new Set([...debaterNames, judge.name]));
   const allowedSet = new Set(allowedSpeakers);
 
-  const messages = buildModeratorMessages(userQuestion, transcript, personas, allowedSpeakers);
+  const messages = buildModeratorMessages(
+    userQuestion,
+    transcript,
+    moderator,
+    activeDebaters,
+    judge,
+    allowedSpeakers
+  );
 
   let raw = "";
   try {
-    raw = await callOllamaChat(personas.moderator.model, messages, { label: "MODERATOR" });
+    raw = await callOllamaChat(moderator.model, messages, { label: "MODERATOR" });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      nextSpeaker: judgeName,
+      nextSpeaker: judge.name,
       shouldConclude: true,
       reason: `Fallback: moderator call failed (${message})`,
     };
@@ -43,7 +62,7 @@ export async function getModeratorDecision(
   }
 
   return {
-    nextSpeaker: judgeName,
+    nextSpeaker: judge.name,
     shouldConclude: true,
     reason: "Fallback: invalid JSON from moderator",
   };
@@ -52,10 +71,12 @@ export async function getModeratorDecision(
 function buildModeratorMessages(
   userQuestion: string,
   transcript: Message[],
-  personas: LoadedPersonas,
+  moderator: PersonaConfig,
+  debaters: PersonaConfig[],
+  judge: PersonaConfig,
   allowedSpeakers: string[]
 ): OllamaChatMessage[] {
-  const debaterSet = new Set(personas.debaters.map((persona) => persona.name));
+  const debaterSet = new Set(debaters.map((persona) => persona.name));
   const recentTranscript =
     transcript
       .slice(-8)
@@ -76,12 +97,12 @@ function buildModeratorMessages(
       .join(" -> ") || "none yet";
 
   const participantRoster = [
-    ...personas.debaters.map((persona) => `- ${persona.name}: ${persona.description}`),
-    `- ${personas.judge.name}: ${personas.judge.description} (final summarizer)`,
+    ...debaters.map((persona) => `- ${persona.name}: ${persona.description}`),
+    `- ${judge.name}: ${judge.description} (final summarizer)`,
   ];
 
   const systemPrompt = [
-    personas.moderator.systemPrompt.trim(),
+    moderator.systemPrompt.trim(),
     "",
     "Participants:",
     ...participantRoster,
@@ -101,7 +122,7 @@ function buildModeratorMessages(
     `Recent debater speaker order (oldest to newest): ${recentDebaterSpeakers}.`,
     "",
     `Valid nextSpeaker values (case-sensitive): ${allowedSpeakers.join(", ")}`,
-    `When it's time for ${personas.judge.name}, set nextSpeaker to "${personas.judge.name}" and shouldConclude to true.`,
+    `When it's time for ${judge.name}, set nextSpeaker to "${judge.name}" and shouldConclude to true.`,
     "",
     "Decide which participant should speak next, and whether we should conclude.",
     "If recent turns repeat similar themes or the discussion feels resolved, select the judge and conclude immediately.",

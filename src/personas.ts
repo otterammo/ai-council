@@ -7,6 +7,7 @@ import {
   DEFAULT_JUDGE_PERSONA,
   DEFAULT_MODERATOR_PERSONA,
   DEFAULT_PERSONAS,
+  ensureCitationGuardrails,
 } from "./agents";
 
 /**
@@ -22,7 +23,9 @@ import {
  * }
  *
  * Save multiple files to add multiple personas. A file name collision replaces the built-in
- * persona with the custom one, while new names extend the council.
+ * persona with the custom one, while new names extend the council. Files may live directly in
+ * ./personas or be organized into subdirectories such as ./personas/debaters/, ./personas/judges/,
+ * etc.—the loader recursively scans the entire tree.
  */
 
 export type PersonaRole = "debater" | "judge" | "moderator";
@@ -80,7 +83,7 @@ export async function loadPersonas(options?: LoadOptions): Promise<LoadedPersona
   let debaters = ordered.filter((p) => p.roleType === "debater");
   if (debaters.length === 0) {
     console.warn(
-      "[personas] No debater personas found. Falling back to built-in Analyst, Optimist, and Critic."
+      "[personas] No debater personas found. Falling back to the default Rationalist-led panel."
     );
     debaters = DEFAULT_DEBATER_PERSONAS.map(clonePersona);
   }
@@ -130,20 +133,8 @@ async function loadPersonaFiles(
     return results;
   }
 
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(personasDir, { withFileTypes: true });
-  } catch (error) {
-    console.warn(`[personas] Failed to read directory "${personasDir}": ${String(error)}`);
-    return results;
-  }
-
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".json")) {
-      continue;
-    }
-
-    const fullPath = path.join(personasDir, entry.name);
+  const filePaths = await collectPersonaFilePaths(personasDir);
+  for (const fullPath of filePaths) {
     try {
       const raw = await fs.readFile(fullPath, "utf8");
       const parsed = JSON.parse(raw);
@@ -157,6 +148,34 @@ async function loadPersonaFiles(
   }
 
   return results;
+}
+
+async function collectPersonaFilePaths(dir: string): Promise<string[]> {
+  const files: string[] = [];
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    console.warn(`[personas] Failed to read directory "${dir}": ${String(error)}`);
+    return files;
+  }
+
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) {
+      continue;
+    }
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const nested = await collectPersonaFilePaths(fullPath);
+      files.push(...nested);
+      continue;
+    }
+    if (entry.isFile() && entry.name.toLowerCase().endsWith(".json")) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
 }
 
 function validatePersonaConfig(candidate: unknown, source: string): PersonaConfig | null {
@@ -219,7 +238,7 @@ function validatePersonaConfig(candidate: unknown, source: string): PersonaConfi
 }
 
 function clonePersona(config: PersonaConfig): PersonaConfig {
-  return { ...config };
+  return ensureCitationGuardrails({ ...config });
 }
 
 function resolvePersonasDir(

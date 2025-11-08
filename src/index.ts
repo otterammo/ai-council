@@ -36,6 +36,7 @@ function divider(width = 40): string {
 
 interface CliOptions {
   personasDir?: string;
+  panelName?: string;
 }
 
 function parseCliOptions(argv: string[]): CliOptions {
@@ -63,12 +64,34 @@ function parseCliOptions(argv: string[]): CliOptions {
       }
       continue;
     }
+    if (arg === "--panel") {
+      const next = argv[i + 1];
+      if (next && !next.startsWith("--")) {
+        const trimmed = next.trim();
+        if (trimmed) {
+          options.panelName = trimmed;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("--panel=")) {
+      const [, value] = arg.split("=", 2);
+      if (value) {
+        const trimmed = value.trim();
+        if (trimmed) {
+          options.panelName = trimmed;
+        }
+      }
+      continue;
+    }
   }
   return options;
 }
 
 async function main(): Promise<void> {
   const cliOptions = parseCliOptions(process.argv.slice(2));
+  const preferredPanelName = cliOptions.panelName || process.env.AI_COUNCIL_PANEL?.trim();
   printBanner();
   const conversationId = Date.now().toString(36);
   console.log(chalk.dim(`=== AI Council Run #${conversationId} ===`));
@@ -131,7 +154,11 @@ async function main(): Promise<void> {
   };
 
   try {
-    await runConversation(question, { hooks, personasDir: cliOptions.personasDir });
+    await runConversation(question, {
+      hooks,
+      personasDir: cliOptions.personasDir,
+      panelName: preferredPanelName,
+    });
   } catch (error) {
     if (spinner.isSpinning) {
       spinner.stop();

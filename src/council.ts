@@ -1,5 +1,6 @@
 import { DEFAULT_TRANSCRIPT_WINDOW } from "./agents";
 import { streamOllamaChat } from "./ollamaClient";
+import { resolveActivePanel } from "./panels";
 import { getModeratorDecision } from "./moderator";
 import { loadPersonas } from "./personas";
 import {
@@ -9,6 +10,7 @@ import {
   OllamaChatMessage,
 } from "./types";
 import type { PersonaConfig } from "./personas";
+import type { ActivePanel } from "./panels";
 
 /**
  * Architecture overview:
@@ -38,15 +40,20 @@ export async function runConversation(
   const maxTurns = options?.maxTurns ?? DEFAULT_MAX_TURNS;
   const hooks = options?.hooks;
   const personas = await loadPersonas({ personasDir: options?.personasDir });
-  const debaterNames = personas.debaters.map((persona) => persona.name);
+  const requestedPanelName = options?.panelName ?? process.env.AI_COUNCIL_PANEL;
+  const panel = resolveActivePanel(personas, requestedPanelName);
+
+  const debaters = panel.debaters;
+  const debaterNames = debaters.map((persona) => persona.name);
   const debaterNameSet = new Set(debaterNames);
-  const judgeName = personas.judge.name;
+  const judge = panel.judge;
+  const judgeName = judge.name;
   const knownSpeakers = new Set([...debaterNames, judgeName]);
   const personaByName = new Map<string, PersonaConfig>();
-  personas.debaters.forEach((persona) => {
+  debaters.forEach((persona) => {
     personaByName.set(persona.name, persona);
   });
-  personaByName.set(personas.judge.name, personas.judge);
+  personaByName.set(judge.name, judge);
 
   let turns = 0;
   let shouldConclude = false;
@@ -87,7 +94,7 @@ export async function runConversation(
     }
 
     // Moderator decides who should speak next (or whether to conclude).
-    const decision = await getModeratorDecision(question, transcript, personas);
+    const decision = await getModeratorDecision(question, transcript, panel);
     let nextSpeaker = decision.nextSpeaker;
     shouldConclude = decision.shouldConclude;
 
@@ -112,13 +119,12 @@ export async function runConversation(
     currentSpeaker = nextSpeaker;
   }
 
-  const judgment = await runJudge(
-    question,
-    transcript,
-    personas.judge,
-    personas.debaters,
-    hooks
-  );
+  const activeSpeakerNames = collectActiveSpeakerNames(transcript, panel);
+  const activeParticipants = activeSpeakerNames
+    .map((name) => personaByName.get(name))
+    .filter((persona): persona is PersonaConfig => Boolean(persona));
+
+  const judgment = await runJudge(question, transcript, panel.judge, activeParticipants, hooks);
 
   return { transcript, judgment };
 }
@@ -247,6 +253,28 @@ async function runJudge(
   return cleanedJudgment;
 }
 
+function collectActiveSpeakerNames(transcript: Message[], panel: ActivePanel): string[] {
+  const allowed = new Set(panel.debaters.map((persona) => persona.name));
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+
+  for (const message of transcript) {
+    if (message.speaker === "User" || message.speaker === panel.judge.name) {
+      continue;
+    }
+    if (!allowed.has(message.speaker)) {
+      continue;
+    }
+    if (seen.has(message.speaker)) {
+      continue;
+    }
+    seen.add(message.speaker);
+    ordered.push(message.speaker);
+  }
+
+  return ordered;
+}
+
 function buildAgentMessages(
   agent: PersonaConfig,
   originalQuestion: string,
@@ -337,8 +365,7 @@ function buildJudgeMessages(
     fullTranscript,
     "",
     "Required format:",
-    "- Provide exactly one concise bullet per listed participant describing their stance, even if they spoke briefly.",
-    "- If a participant contributed nothing, still include a bullet that explicitly notes that lack of input.",
+    "- Provide exactly one concise bullet per listed participant describing their stance. These are the only personas who spoke—do NOT mention others.",
     "- Include at most two bullets for Agreements and at most two bullets for Disagreements, covering only the most important points.",
     "- Final Recommendation must be 2–3 sentences that synthesize the debate without introducing brand-new arguments.",
     'End with a line that begins exactly with "Final Recommendation:" followed by the conclusion.',
@@ -405,6 +432,8 @@ function cleanSpeakerOutput(text: string): string {
     `${leading}I `
   );
   cleaned = cleaned.replace(/^\s*\[([^\]]+)\]\s*/i, "");
+  cleaned = cleaned.replace(/\s*\[\d+\](?=[\s,.;:!?)]|$)/g, "");
+  cleaned = cleaned.replace(/\n+References:\s*[\s\S]*$/i, "");
   return cleaned.trimStart();
 }
 

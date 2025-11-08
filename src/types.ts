@@ -37,6 +37,7 @@ export interface CouncilOptions {
   maxTurns?: number;
   transcriptWindow?: number;
   personasDir?: string;
+  panelName?: string;
   hooks?: CouncilHooks;
 }
 

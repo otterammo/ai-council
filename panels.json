@@ -1,0 +1,16 @@
+{
+  "panels": [
+    {
+      "name": "core",
+      "debaters": ["Analyst", "Critic", "Optimist", "Pessimist", "Realist"],
+      "judge": "Judge",
+      "moderator": "Moderator"
+    },
+    {
+      "name": "philosophy",
+      "debaters": ["Rationalist", "Humanist", "Skeptic", "Pragmatist", "Existentialist", "Empiricist"],
+      "judge": "Judge",
+      "moderator": "Moderator"
+    }
+  ]
+}
