@@ -34,7 +34,41 @@ function divider(width = 40): string {
   return "─".repeat(width);
 }
 
+interface CliOptions {
+  personasDir?: string;
+}
+
+function parseCliOptions(argv: string[]): CliOptions {
+  const options: CliOptions = {};
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--personas") {
+      const next = argv[i + 1];
+      if (next && !next.startsWith("--")) {
+        const trimmed = next.trim();
+        if (trimmed) {
+          options.personasDir = trimmed;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("--personas=")) {
+      const [, value] = arg.split("=", 2);
+      if (value) {
+        const trimmed = value.trim();
+        if (trimmed) {
+          options.personasDir = trimmed;
+        }
+      }
+      continue;
+    }
+  }
+  return options;
+}
+
 async function main(): Promise<void> {
+  const cliOptions = parseCliOptions(process.argv.slice(2));
   printBanner();
   const conversationId = Date.now().toString(36);
   console.log(chalk.dim(`=== AI Council Run #${conversationId} ===`));
@@ -97,7 +131,7 @@ async function main(): Promise<void> {
   };
 
   try {
-    await runConversation(question, { hooks });
+    await runConversation(question, { hooks, personasDir: cliOptions.personasDir });
   } catch (error) {
     if (spinner.isSpinning) {
       spinner.stop();

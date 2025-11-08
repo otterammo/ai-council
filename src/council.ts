@@ -1,14 +1,14 @@
-import { AGENTS, DEFAULT_TRANSCRIPT_WINDOW, JUDGE_AGENT } from "./agents";
+import { DEFAULT_TRANSCRIPT_WINDOW } from "./agents";
 import { streamOllamaChat } from "./ollamaClient";
 import { getModeratorDecision } from "./moderator";
+import { loadPersonas } from "./personas";
 import {
-  AgentConfig,
   CouncilOptions,
   CouncilResult,
   Message,
   OllamaChatMessage,
-  SpeakerName,
 } from "./types";
+import type { PersonaConfig } from "./personas";
 
 /**
  * Architecture overview:
@@ -23,7 +23,6 @@ import {
 
 const DEFAULT_MAX_TURNS = 12;
 const MAX_DEBATER_TURNS = 8; // Hard cap so the debate cannot exceed the intended 6–8 debater turn budget.
-const DEBATER_SPEAKERS: SpeakerName[] = ["Analyst", "Optimist", "Critic"];
 
 export async function runConversation(
   userQuestion: string,
@@ -38,79 +37,109 @@ export async function runConversation(
   const transcriptWindow = options?.transcriptWindow ?? DEFAULT_TRANSCRIPT_WINDOW;
   const maxTurns = options?.maxTurns ?? DEFAULT_MAX_TURNS;
   const hooks = options?.hooks;
+  const personas = await loadPersonas({ personasDir: options?.personasDir });
+  const debaterNames = personas.debaters.map((persona) => persona.name);
+  const debaterNameSet = new Set(debaterNames);
+  const judgeName = personas.judge.name;
+  const knownSpeakers = new Set([...debaterNames, judgeName]);
+  const personaByName = new Map<string, PersonaConfig>();
+  personas.debaters.forEach((persona) => {
+    personaByName.set(persona.name, persona);
+  });
+  personaByName.set(personas.judge.name, personas.judge);
 
   let turns = 0;
   let shouldConclude = false;
-  let currentSpeaker: SpeakerName = "Analyst";
-  let lastSpeaker: SpeakerName | null = null;
+  let currentSpeaker: string = debaterNames[0] ?? judgeName;
+  let lastSpeaker: string | null = null;
   let debaterTurns = 0;
 
   while (turns < maxTurns && !shouldConclude) {
-    if (currentSpeaker === "Judge") {
+    if (currentSpeaker === judgeName) {
       shouldConclude = true;
       break;
     }
 
+    const currentPersona = personaByName.get(currentSpeaker);
+    if (!currentPersona) {
+      throw new Error(`Unknown persona: ${currentSpeaker}`);
+    }
+
     await runSingleTurnForAgent(
-      currentSpeaker,
+      currentPersona,
       question,
       transcript,
       transcriptWindow,
+      debaterNameSet,
       hooks
     );
 
     turns += 1;
-    if (isDebaterSpeaker(currentSpeaker)) {
+    if (debaterNameSet.has(currentSpeaker)) {
       debaterTurns += 1;
     }
     lastSpeaker = currentSpeaker;
 
-    if (isDebaterSpeaker(currentSpeaker) && debaterTurns >= MAX_DEBATER_TURNS) {
+    if (debaterNameSet.has(currentSpeaker) && debaterTurns >= MAX_DEBATER_TURNS) {
       // Force a hand-off to Judge if we already consumed the allotted debater turns.
-      currentSpeaker = "Judge";
+      currentSpeaker = judgeName;
       continue;
     }
 
     // Moderator decides who should speak next (or whether to conclude).
-    const decision = await getModeratorDecision(question, transcript);
+    const decision = await getModeratorDecision(question, transcript, personas);
     let nextSpeaker = decision.nextSpeaker;
     shouldConclude = decision.shouldConclude;
 
     if (
       !shouldConclude &&
-      DEBATER_SPEAKERS.includes(nextSpeaker) &&
+      debaterNameSet.has(nextSpeaker) &&
       nextSpeaker === lastSpeaker
     ) {
-      const alternatives = DEBATER_SPEAKERS.filter((name) => name !== lastSpeaker);
+      const alternatives = debaterNames.filter((name) => name !== lastSpeaker);
       if (alternatives.length > 0) {
         nextSpeaker = alternatives[Math.floor(Math.random() * alternatives.length)];
       }
     }
 
+    if (!knownSpeakers.has(nextSpeaker)) {
+      nextSpeaker = judgeName;
+      shouldConclude = true;
+    } else if (!shouldConclude && nextSpeaker === judgeName) {
+      shouldConclude = true;
+    }
+
     currentSpeaker = nextSpeaker;
   }
 
-  const judgment = await runJudge(question, transcript, hooks);
+  const judgment = await runJudge(
+    question,
+    transcript,
+    personas.judge,
+    personas.debaters,
+    hooks
+  );
 
   return { transcript, judgment };
 }
 
 async function runSingleTurnForAgent(
-  speaker: SpeakerName,
+  agent: PersonaConfig,
   originalQuestion: string,
   transcript: Message[],
   transcriptWindow: number,
+  debaterNameSet: Set<string>,
   hooks?: CouncilOptions["hooks"]
 ): Promise<void> {
-  const agent = getAgentConfig(speaker);
   const windowSize = agent.transcriptWindow ?? transcriptWindow;
-  const hasAnyAgentSpoken = transcript.some((msg) => isDebaterSpeaker(msg.speaker));
+  const hasAnyAgentSpoken = transcript.some((msg) => debaterNameSet.has(msg.speaker));
   const messages = buildAgentMessages(
     agent,
     originalQuestion,
     transcript,
     windowSize,
-    hasAnyAgentSpoken
+    hasAnyAgentSpoken,
+    debaterNameSet
   );
 
   hooks?.onAgentTurnStart?.(agent);
@@ -166,10 +195,12 @@ async function runSingleTurnForAgent(
 async function runJudge(
   originalQuestion: string,
   transcript: Message[],
+  judge: PersonaConfig,
+  participants: PersonaConfig[],
   hooks?: CouncilOptions["hooks"]
 ): Promise<string> {
-  const messages = buildJudgeMessages(originalQuestion, transcript);
-  hooks?.onJudgeStart?.(JUDGE_AGENT);
+  const messages = buildJudgeMessages(originalQuestion, transcript, judge, participants);
+  hooks?.onJudgeStart?.(judge);
 
   const shouldStream = typeof hooks?.onJudgeToken === "function";
   let rawJudgment = "";
@@ -197,8 +228,8 @@ async function runJudge(
 
   let judgment = "";
   try {
-    judgment = await streamOllamaChat(JUDGE_AGENT.model, messages, tokenHandler, {
-      label: "JUDGE",
+    judgment = await streamOllamaChat(judge.model, messages, tokenHandler, {
+      label: judge.name.toUpperCase(),
     });
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
@@ -212,30 +243,23 @@ async function runJudge(
 
   const cleanedJudgment = cleanSpeakerOutput(judgment).trim();
   hooks?.onJudgeComplete?.(cleanedJudgment);
-  transcript.push({ speaker: "Judge", content: cleanedJudgment });
+  transcript.push({ speaker: judge.name, content: cleanedJudgment });
   return cleanedJudgment;
 }
 
-function getAgentConfig(name: SpeakerName): AgentConfig {
-  const agent = AGENTS.find((candidate) => candidate.name === name);
-  if (!agent) {
-    throw new Error(`Unknown agent: ${name}`);
-  }
-  return agent;
-}
-
 function buildAgentMessages(
-  agent: AgentConfig,
+  agent: PersonaConfig,
   originalQuestion: string,
   transcript: Message[],
   transcriptWindow: number,
-  hasAnyAgentSpoken: boolean
+  hasAnyAgentSpoken: boolean,
+  debaterNameSet: Set<string>
 ): OllamaChatMessage[] {
   const recent = transcript.slice(-transcriptWindow);
   const recap = serializeTranscript(recent) || "(no debate history yet)";
   const lastDifferentDebater = [...transcript]
     .reverse()
-    .find((msg) => isDebaterSpeaker(msg.speaker) && msg.speaker !== agent.name);
+    .find((msg) => debaterNameSet.has(msg.speaker) && msg.speaker !== agent.name);
   const lastSelfTurn = [...transcript]
     .reverse()
     .find((msg) => msg.speaker === agent.name);
@@ -263,11 +287,9 @@ function buildAgentMessages(
     !hasAnyAgentSpoken ? "First-turn constraints:" : undefined,
     !hasAnyAgentSpoken ? "No other agents have spoken yet in this conversation." : undefined,
     !hasAnyAgentSpoken ? "You are the first agent to respond to the user's question." : undefined,
+    !hasAnyAgentSpoken ? "Do NOT claim that other agents already spoke." : undefined,
     !hasAnyAgentSpoken
-      ? 'Do NOT claim that another agent already said something or refer to "what Optimist / Critic already said."'
-      : undefined,
-    !hasAnyAgentSpoken
-      ? 'You may hypothetically say "Optimist might argue that..." but make it clear it is hypothetical, not a summary of earlier turns.'
+      ? "You may hypothesize what others might argue, but make it clear it is speculative rather than a recap."
       : undefined,
     lastDifferentDebater
       ? `Previous speaker (${lastDifferentDebater.speaker}) focused on: """${compressForPrompt(
@@ -293,24 +315,37 @@ function buildAgentMessages(
   ];
 }
 
-function buildJudgeMessages(originalQuestion: string, transcript: Message[]): OllamaChatMessage[] {
+function buildJudgeMessages(
+  originalQuestion: string,
+  transcript: Message[],
+  judge: PersonaConfig,
+  participants: PersonaConfig[]
+): OllamaChatMessage[] {
   const fullTranscript = serializeTranscript(transcript) || "(empty)";
+  const participantRoster =
+    participants.length > 0
+      ? participants.map((persona) => `- ${persona.name}: ${persona.description}`).join("\n")
+      : "- (no debaters were recorded)";
 
   const userContent = [
     `User Question: ${originalQuestion}`,
+    "",
+    "Participants to summarize:",
+    participantRoster,
     "",
     "Full debate transcript:",
     fullTranscript,
     "",
     "Required format:",
-    "- Provide exactly one concise bullet per agent describing their stance.",
+    "- Provide exactly one concise bullet per listed participant describing their stance, even if they spoke briefly.",
+    "- If a participant contributed nothing, still include a bullet that explicitly notes that lack of input.",
     "- Include at most two bullets for Agreements and at most two bullets for Disagreements, covering only the most important points.",
     "- Final Recommendation must be 2–3 sentences that synthesize the debate without introducing brand-new arguments.",
     'End with a line that begins exactly with "Final Recommendation:" followed by the conclusion.',
   ].join("\n");
 
   return [
-    { role: "system", content: JUDGE_AGENT.systemPrompt },
+    { role: "system", content: judge.systemPrompt },
     { role: "user", content: userContent },
   ];
 }
@@ -333,13 +368,18 @@ function formatAgentOutput(agentName: string, text: string): string {
 }
 
 function stripSpeakerArtifacts(text: string): string {
-  return text.replace(/^\s*\[(Analyst|Optimist|Critic|Judge)\]\s*/i, "");
+  return text.replace(/^\s*\[([^\]]+)\]\s*/i, "");
 }
 
 function normalizeSelfReference(agentName: string, text: string): string {
-  const possessive = new RegExp(`\\b${agentName}'?s\\b`, "gi");
-  const standalone = new RegExp(`\\b${agentName}\\b`, "gi");
-  return text.replace(possessive, "my").replace(standalone, "I");
+  const escaped = escapeRegExp(agentName);
+  const leadingTag = new RegExp(`^\\s*${escaped}\\s*[:\\-]\\s*`, "i");
+  let updated = text.replace(leadingTag, "");
+  const possessive = new RegExp(`(?<!\\w)${escaped}'?s(?!\\w)`, "gi");
+  updated = updated.replace(possessive, "my");
+  const standalone = new RegExp(`(?<!\\w)${escaped}(?!\\w)`, "gi");
+  updated = updated.replace(standalone, "I");
+  return updated;
 }
 
 function stripClichedLeadIn(text: string): string {
@@ -361,12 +401,15 @@ function cleanSpeakerOutput(text: string): string {
   cleaned = cleaned.replace(/^\s*Me\s+(?=[A-Za-z])/i, "");
   cleaned = cleaned.replace(/^\s*Me,\s*I\s+think\b/i, "I think");
   cleaned = cleaned.replace(/^\s*me\s+would\s+like\b/i, "I would like");
-  cleaned = cleaned.replace(/^\s*\[(Analyst|Optimist|Critic|Judge)\]\s*/i, "");
+  cleaned = cleaned.replace(/^(\s*)Me(?=(agree|acknowledge|appreciate|believe|think|want|would|could|should|can|need|accept|understand|support|urge)\b)/i, (_, leading) =>
+    `${leading}I `
+  );
+  cleaned = cleaned.replace(/^\s*\[([^\]]+)\]\s*/i, "");
   return cleaned.trimStart();
 }
 
-function isDebaterSpeaker(speaker: SpeakerName | "User"): speaker is SpeakerName {
-  return speaker === "Analyst" || speaker === "Optimist" || speaker === "Critic";
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function compressForPrompt(text: string, maxLength = 280): string {

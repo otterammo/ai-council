@@ -1,3 +1,5 @@
+import type { PersonaConfig } from "./personas";
+
 export type OllamaRole = "system" | "user" | "assistant";
 
 export interface OllamaChatMessage {
@@ -5,26 +7,17 @@ export interface OllamaChatMessage {
   content: string;
 }
 
-export type SpeakerName = "Analyst" | "Optimist" | "Critic" | "Judge";
+export type SpeakerName = "User" | string;
 
 export type Message = {
-  speaker: SpeakerName | "User";
+  speaker: SpeakerName;
   content: string;
 };
 
-export type AgentConfig = {
-  name: SpeakerName;
-  model: string;
-  systemPrompt: string;
-  /**
-   * Optional override for how many previous transcript entries this agent
-   * should see when forming its response.
-   */
-  transcriptWindow?: number;
-};
+export type AgentConfig = PersonaConfig;
 
 export type ModeratorDecision = {
-  nextSpeaker: SpeakerName;
+  nextSpeaker: string;
   shouldConclude: boolean;
   reason?: string;
 };
@@ -43,6 +36,7 @@ export interface CouncilHooks {
 export interface CouncilOptions {
   maxTurns?: number;
   transcriptWindow?: number;
+  personasDir?: string;
   hooks?: CouncilHooks;
 }
 
