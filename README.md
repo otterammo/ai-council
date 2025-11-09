@@ -2,6 +2,8 @@
 
 `ai-council` is a local-first CLI that runs a multi-agent debate between purpose-built LLM personas backed by Ollama. You watch the back-and-forth unfold in your terminal, then receive a judge’s synthesized recommendation grounded in every argument that was raised.
 
+![AI council CLI demo](docs/assets/ai-council-demo.gif)
+
 ## Features
 - Runs entirely on your machine against Ollama (`http://localhost:11434`)—no cloud keys or remote telemetry.
 - Streams every token from each persona so you can inspect the thought process in real time.
