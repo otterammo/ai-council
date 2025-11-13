@@ -1,0 +1,8 @@
+node_modules
+dist
+npm-debug.log*
+*.log
+.DS_Store
+.git
+.gitignore
+docs/assets/*.gif

@@ -1,0 +1,13 @@
+services:
+  council:
+    build:
+      context: .
+    environment:
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./personas:/app/personas:ro
+      - ./panels.json:/app/panels.json:ro

@@ -70,6 +70,40 @@ npm install
      ```
    - Run `npm run dev -- --panel systems` to see the customized roster. User-defined personas and panels override built-ins when names collide.
 
+## Running with Docker
+1. **Build the image.**
+   ```bash
+   docker build -t ai-council .
+   ```
+2. **Run the CLI inside the container.**
+   ```bash
+   docker run -it --rm \
+     -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
+     ai-council
+   ```
+   - `-it` keeps the interactive prompt so you can enter a question.
+   - Point `OLLAMA_BASE_URL` at an Ollama instance the container can reach. When Ollama runs on the host, `host.docker.internal` works on macOS/Windows. On Linux, add `--add-host=host.docker.internal:host-gateway` (Docker 20.10+) or use `--network host`.
+3. **Mount custom personas/panels (optional).**
+   ```bash
+   docker run -it --rm \
+     -v $(pwd)/personas:/app/personas:ro \
+     -v $(pwd)/panels.json:/app/panels.json:ro \
+     -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
+     ai-council --panel philosophy
+   ```
+   Bind mounts let you override the personas and panels shipped in the image, just like running the CLI locally.
+
+### Using Docker Compose
+1. **Build the service.**
+   ```bash
+   docker compose build
+   ```
+2. **Run the CLI.**
+   ```bash
+   docker compose run council
+   ```
+   The Compose file (`docker-compose.yml`) keeps `stdin`/`tty` open for interactive prompts, forwards `OLLAMA_BASE_URL` to `http://host.docker.internal:11434`, and adds an `extra_hosts` entry (`host-gateway`) so Linux hosts can still resolve the address. It also mounts local `personas/` and `panels.json` read-only, mirroring the override behavior you get when running the CLI directly.
+
 ## Usage
 ### Typical flow
 1. Start Ollama if it is not already running.
