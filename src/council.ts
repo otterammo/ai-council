@@ -292,6 +292,24 @@ function buildAgentMessages(
     .reverse()
     .find((msg) => msg.speaker === agent.name);
 
+  const otherSpeakerSet = new Set<string>();
+  const priorOtherSpeakers: string[] = [];
+  for (const entry of transcript) {
+    if (!debaterNameSet.has(entry.speaker)) {
+      continue;
+    }
+    if (entry.speaker === agent.name) {
+      continue;
+    }
+    if (otherSpeakerSet.has(entry.speaker)) {
+      continue;
+    }
+    otherSpeakerSet.add(entry.speaker);
+    priorOtherSpeakers.push(entry.speaker);
+  }
+  const allOtherDebaters = Array.from(debaterNameSet).filter((name) => name !== agent.name);
+  const notYetSpeakers = allOtherDebaters.filter((name) => !otherSpeakerSet.has(name));
+
   const instructions: (string | undefined)[] = [
     `User Question: ${originalQuestion}`,
     "",
@@ -312,6 +330,18 @@ function buildAgentMessages(
     "- If you genuinely have nothing new, say so succinctly (1–2 sentences) and yield the floor.",
     "- Do NOT summarize the entire discussion; assume everyone remembers it.",
     "- Aim either to move the conversation forward with something new or be brief and acknowledge alignment.",
+    priorOtherSpeakers.length > 0
+      ? `Debaters who have already spoken: ${priorOtherSpeakers.join(", ")}.`
+      : undefined,
+    priorOtherSpeakers.length > 0
+      ? "- Reference only points from those debaters; if you invoke anyone else, make it explicit that you are predicting rather than recapping."
+      : undefined,
+    notYetSpeakers.length > 0
+      ? `Debaters who have not spoken yet: ${notYetSpeakers.join(", ")}.`
+      : undefined,
+    notYetSpeakers.length > 0
+      ? "- Do NOT claim these personas already weighed in; if you speculate about them, label it clearly as a hypothesis."
+      : undefined,
     !hasAnyAgentSpoken ? "First-turn constraints:" : undefined,
     !hasAnyAgentSpoken ? "No other agents have spoken yet in this conversation." : undefined,
     !hasAnyAgentSpoken ? "You are the first agent to respond to the user's question." : undefined,
@@ -428,6 +458,12 @@ function cleanSpeakerOutput(text: string): string {
   cleaned = cleaned.replace(/^\s*Me\s+(?=[A-Za-z])/i, "");
   cleaned = cleaned.replace(/^\s*Me,\s*I\s+think\b/i, "I think");
   cleaned = cleaned.replace(/^\s*me\s+would\s+like\b/i, "I would like");
+  cleaned = cleaned.replace(/([,;])?\s*\bme\s*:\s*/gi, (match: string, punct?: string) => {
+    if (match.includes("\n")) {
+      return punct ? `${punct} ` : "\n";
+    }
+    return punct ? `${punct} ` : " ";
+  });
   cleaned = cleaned.replace(/^(\s*)Me(?=(agree|acknowledge|appreciate|believe|think|want|would|could|should|can|need|accept|understand|support|urge)\b)/i, (_, leading) =>
     `${leading}I `
   );
@@ -448,3 +484,15 @@ function compressForPrompt(text: string, maxLength = 280): string {
   }
   return `${singleLine.slice(0, maxLength - 1)}…`;
 }
+
+export const __testables = {
+  runSingleTurnForAgent,
+  buildAgentMessages,
+  buildJudgeMessages,
+  collectActiveSpeakerNames,
+  cleanSpeakerOutput,
+  formatAgentOutput,
+  compressForPrompt,
+  MAX_DEBATER_TURNS,
+  DEFAULT_MAX_TURNS,
+};

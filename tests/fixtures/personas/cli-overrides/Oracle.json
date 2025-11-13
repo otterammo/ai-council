@@ -1,0 +1,7 @@
+{
+  "name": "Oracle",
+  "roleType": "judge",
+  "model": "llama3.1:8b",
+  "description": "Gives decisive calls.",
+  "systemPrompt": "Summarize crisply with decisive tone."
+}

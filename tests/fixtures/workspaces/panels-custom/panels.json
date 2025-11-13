@@ -1,0 +1,10 @@
+{
+  "panels": [
+    {
+      "name": "product",
+      "debaters": ["Visionary", "DeliveryLead", "Visionary"],
+      "judge": "Oracle",
+      "moderator": "OpsModerator"
+    }
+  ]
+}

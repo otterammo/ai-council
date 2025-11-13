@@ -1,0 +1,7 @@
+{
+  "name": "OpsModerator",
+  "roleType": "moderator",
+  "model": "llama3.1:8b",
+  "description": "Keeps debate orderly.",
+  "systemPrompt": "Select the next voice with fairness."
+}

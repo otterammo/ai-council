@@ -1,0 +1,7 @@
+{
+  "name": "Humanist",
+  "roleType": "judge",
+  "model": "llama3.1:8b",
+  "description": "Repurposed persona.",
+  "systemPrompt": "Judge version."
+}

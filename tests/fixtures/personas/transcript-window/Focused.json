@@ -1,0 +1,8 @@
+{
+  "name": "Focused",
+  "roleType": "debater",
+  "model": "llama3.1:8b",
+  "description": "Keeps window tight.",
+  "systemPrompt": "Answer with concise focus.",
+  "transcriptWindow": 2
+}

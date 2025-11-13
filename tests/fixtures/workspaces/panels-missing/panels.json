@@ -1,0 +1,10 @@
+{
+  "panels": [
+    {
+      "name": "custom",
+      "debaters": ["Ghost", "Phantom"],
+      "judge": "Oracle",
+      "moderator": "Maestro"
+    }
+  ]
+}

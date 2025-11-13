@@ -39,7 +39,7 @@ interface CliOptions {
   panelName?: string;
 }
 
-function parseCliOptions(argv: string[]): CliOptions {
+export function parseCliOptions(argv: string[]): CliOptions {
   const options: CliOptions = {};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -176,7 +176,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(chalk.red(error instanceof Error ? error.message : String(error)));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+    process.exit(1);
+  });
+}

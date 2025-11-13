@@ -1,0 +1,7 @@
+{
+  "name": "JudgeOnly",
+  "roleType": "judge",
+  "model": "llama3.1:8b",
+  "description": "Solo decider.",
+  "systemPrompt": "Always deliver final summary."
+}

@@ -178,7 +178,7 @@ async function collectPersonaFilePaths(dir: string): Promise<string[]> {
   return files;
 }
 
-function validatePersonaConfig(candidate: unknown, source: string): PersonaConfig | null {
+export function validatePersonaConfig(candidate: unknown, source: string): PersonaConfig | null {
   if (!candidate || typeof candidate !== "object") {
     console.warn(`[personas] ${source} must contain a JSON object.`);
     return null;
